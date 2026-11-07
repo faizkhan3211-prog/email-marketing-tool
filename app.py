@@ -1,9 +1,6 @@
-
 import streamlit as st
 import pandas as pd
 import io
-import smtplib
-import ssl
 
 st.set_page_config(
     page_title="Email Marketing Tool",
@@ -11,334 +8,142 @@ st.set_page_config(
     layout="wide"
 )
 
-# Session storage
-if "email_accounts" not in st.session_state:
-    st.session_state.email_accounts = []
-
 st.title("📧 Email Marketing Tool")
-st.caption("B2B Lead Management & Email Account Connections")
+st.subheader("B2B Lead Management System")
 
-# --------------------------------
-# EMAIL PROVIDER SETTINGS
-# --------------------------------
+# -------------------------------
+# MICROSOFT OUTLOOK CONNECTION
+# -------------------------------
 
-PROVIDERS = {
-    "Gmail": {
-        "host": "smtp.gmail.com",
-        "port": 465,
-        "security": "SSL"
-    },
-    "Google Workspace": {
-        "host": "smtp.gmail.com",
-        "port": 465,
-        "security": "SSL"
-    },
-    "Outlook / Microsoft 365": {
-        "host": "smtp.office365.com",
-        "port": 587,
-        "security": "STARTTLS"
-    },
-    "Zoho Mail": {
-        "host": "smtp.zoho.com",
-        "port": 465,
-        "security": "SSL"
-    },
-    "Other Business Email (SMTP)": {
-        "host": "",
-        "port": 465,
-        "security": "SSL"
-    }
-}
+st.markdown("## Connect Your Email Account")
 
-# --------------------------------
-# SIDEBAR
-# --------------------------------
-
-page = st.sidebar.radio(
-    "Navigation",
-    [
-        "Dashboard",
-        "Connect Email",
-        "Lead Import"
-    ]
-)
-
-# --------------------------------
-# DASHBOARD
-# --------------------------------
-
-if page == "Dashboard":
-
-    st.header("Dashboard")
-
-    col1, col2 = st.columns(2)
-
-    col1.metric(
-        "Connected Email Accounts",
-        len(st.session_state.email_accounts)
+try:
+    microsoft_configured = (
+        "auth" in st.secrets
+        and "microsoft" in st.secrets["auth"]
     )
+except Exception:
+    microsoft_configured = False
 
-    col2.metric(
-        "Email Campaigns",
-        0
+if not microsoft_configured:
+    st.info(
+        "Microsoft OAuth setup is not complete yet. "
+        "Complete the Microsoft registration and Streamlit secrets setup."
     )
-
-    st.subheader("Connected Accounts")
-
-    if st.session_state.email_accounts:
-
-        for account in st.session_state.email_accounts:
-
-            st.write(
-                f"📧 {account['email']} "
-                f"({account['provider']})"
+else:
+    try:
+        if st.user.is_logged_in:
+            microsoft_email = (
+                st.user.get("preferred_username")
+                or st.user.get("email")
+                or st.user.get("name")
+                or "Microsoft account"
             )
 
-    else:
-        st.info("No email accounts connected yet.")
+            st.success(f"Connected with Microsoft: {microsoft_email}")
 
-# --------------------------------
-# CONNECT EMAIL
-# --------------------------------
-
-elif page == "Connect Email":
-
-    st.header("Connect Your Email Account")
-
-    st.write(
-        "Select your email provider and enter "
-        "your SMTP connection details."
-    )
-
-    provider = st.selectbox(
-        "Select Email Provider",
-        list(PROVIDERS.keys())
-    )
-
-    settings = PROVIDERS[provider]
-
-    with st.form("email_connection_form"):
-
-        email = st.text_input(
-            "Email Address",
-            placeholder="you@example.com"
-        )
-
-        username = st.text_input(
-            "SMTP Username",
-            placeholder="Usually your full email address"
-        )
-
-        smtp_host = st.text_input(
-            "SMTP Server",
-            value=settings["host"]
-        )
-
-        smtp_port = st.number_input(
-            "SMTP Port",
-            min_value=1,
-            max_value=65535,
-            value=settings["port"]
-        )
-
-        security = st.selectbox(
-            "Connection Security",
-            ["SSL", "STARTTLS"],
-            index=0 if settings["security"] == "SSL" else 1
-        )
-
-        password = st.text_input(
-            "Password / App Password",
-            type="password"
-        )
-
-        submitted = st.form_submit_button(
-            "Test Connection & Connect",
-            use_container_width=True
-        )
-
-    if submitted:
-
-        if not all([
-            email.strip(),
-            username.strip(),
-            smtp_host.strip(),
-            password
-        ]):
-            st.error("Please complete all required fields.")
+            if st.button("Disconnect Microsoft Account"):
+                st.logout()
 
         else:
+            if st.button(
+                "🔵 Connect with Hotmail / Outlook",
+                use_container_width=True
+            ):
+                st.login("microsoft")
 
+    except Exception as e:
+        st.error(f"Microsoft connection error: {e}")
+
+st.divider()
+
+# -------------------------------
+# CSV LEAD UPLOAD
+# -------------------------------
+
+st.header("Import Leads")
+
+uploaded_file = st.file_uploader(
+    "Upload your CSV file",
+    type=["csv"]
+)
+
+if uploaded_file is not None:
+
+    try:
+        file_bytes = uploaded_file.getvalue()
+
+        df = None
+        last_error = None
+
+        for encoding in ["utf-8-sig", "utf-8", "cp1252", "latin1"]:
             try:
-
-                context = ssl.create_default_context()
-
-                if security == "SSL":
-
-                    server = smtplib.SMTP_SSL(
-                        smtp_host.strip(),
-                        int(smtp_port),
-                        context=context,
-                        timeout=20
-                    )
-
-                else:
-
-                    server = smtplib.SMTP(
-                        smtp_host.strip(),
-                        int(smtp_port),
-                        timeout=20
-                    )
-
-                    server.ehlo()
-                    server.starttls(context=context)
-                    server.ehlo()
-
-                server.login(
-                    username.strip(),
-                    password.replace(" ", "")
+                df = pd.read_csv(
+                    io.BytesIO(file_bytes),
+                    encoding=encoding,
+                    dtype=str,
+                    keep_default_na=False
                 )
-
-                server.quit()
-
-                # Save credentials in session only
-                existing = [
-                    a for a in st.session_state.email_accounts
-                    if a["email"].lower() != email.strip().lower()
-                ]
-
-                existing.append({
-                    "provider": provider,
-                    "email": email.strip(),
-                    "username": username.strip(),
-                    "host": smtp_host.strip(),
-                    "port": int(smtp_port),
-                    "security": security,
-                    "password": password.replace(" ", "")
-                })
-
-                st.session_state.email_accounts = existing
-
-                st.success(
-                    f"Successfully connected: {email}"
-                )
-
+                break
             except Exception as e:
+                last_error = e
 
-                st.error(
-                    f"Connection failed: {str(e)}"
-                )
+        if df is None:
+            st.error(f"Could not read CSV: {last_error}")
+            st.stop()
 
-    st.divider()
+        df.columns = df.columns.astype(str).str.strip()
 
-    st.subheader("Your Connected Accounts")
+        st.success("CSV uploaded successfully!")
 
-    if st.session_state.email_accounts:
+        email_columns = [
+            col for col in df.columns
+            if col.strip().lower() in ["email", "email address", "e-mail"]
+        ]
 
-        for i, account in enumerate(
-            st.session_state.email_accounts
-        ):
+        if email_columns:
+            email_col = email_columns[0]
 
-            col1, col2, col3 = st.columns([3, 2, 1])
-
-            col1.write(f"📧 {account['email']}")
-            col2.write(account["provider"])
-
-            if col3.button("Remove", key=f"remove_{i}"):
-
-                st.session_state.email_accounts.pop(i)
-                st.rerun()
-
-    else:
-
-        st.info("Connect your first email account above.")
-
-    st.caption(
-        "Credentials are kept in Streamlit session memory only. "
-        "They are not saved permanently."
-    )
-
-# --------------------------------
-# LEAD IMPORT
-# --------------------------------
-
-elif page == "Lead Import":
-
-    st.header("Import B2B Leads")
-
-    uploaded_file = st.file_uploader(
-        "Upload CSV File",
-        type=["csv"]
-    )
-
-    if uploaded_file:
-
-        try:
-
-            raw_data = uploaded_file.getvalue()
-
-            df = None
-
-            for encoding in [
-                "utf-8-sig",
-                "utf-8",
-                "cp1252",
-                "latin1"
-            ]:
-
-                try:
-
-                    df = pd.read_csv(
-                        io.BytesIO(raw_data),
-                        encoding=encoding,
-                        dtype=str,
-                        keep_default_na=False
-                    )
-
-                    break
-
-                except UnicodeDecodeError:
-                    continue
-
-            if df is None:
-                st.error("Unable to read CSV file.")
-                st.stop()
-
-            df.columns = df.columns.str.strip()
-
-            st.success("Leads uploaded successfully!")
-
-            total = len(df)
-
-            if "Email" in df.columns:
-
-                df["Email"] = df["Email"].str.strip()
-
-                duplicates = (
-                    df["Email"].str.lower()
-                    .duplicated()
-                    .sum()
-                )
-
-            else:
-
-                duplicates = 0
-                st.warning("Email column not found.")
-
-            col1, col2, col3 = st.columns(3)
-
-            col1.metric("Total Leads", total)
-            col2.metric("Duplicate Emails", duplicates)
-            col3.metric("Unique Leads", total - duplicates)
-
-            st.subheader("Lead Preview")
-
-            st.dataframe(
-                df,
-                use_container_width=True,
-                hide_index=True
+            emails = (
+                df[email_col]
+                .astype(str)
+                .str.strip()
+                .str.lower()
             )
 
-        except Exception as e:
+            valid_emails = emails[emails != ""]
 
-            st.error(f"File processing error: {e}")
+            duplicate_count = int(
+                valid_emails.duplicated().sum()
+            )
+
+            unique_count = int(
+                valid_emails.nunique()
+            )
+        else:
+            duplicate_count = 0
+            unique_count = len(df)
+
+        col1, col2, col3 = st.columns(3)
+
+        col1.metric("Total Leads", len(df))
+        col2.metric("Duplicate Emails", duplicate_count)
+        col3.metric("Unique Leads", unique_count)
+
+        st.subheader("Lead Preview")
+        st.dataframe(df, use_container_width=True)
+
+        csv_data = df.to_csv(index=False).encode("utf-8")
+
+        st.download_button(
+            "Download Clean CSV",
+            data=csv_data,
+            file_name="clean_leads.csv",
+            mime="text/csv"
+        )
+
+    except Exception as e:
+        st.error(f"Upload error: {e}")
+
+else:
+    st.info("Upload a CSV file to manage your leads.")
